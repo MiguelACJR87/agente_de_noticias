@@ -47,7 +47,7 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
 PERFIS = {
     "condominios": {
         "titulo": "🏢 <b>As Notícias Condominiais do Dia</b> 🏢",
-        "busca": "condominio OR sindico when:1d",
+        "busca": "condominio OR sindico when:4h",
         "persona": (
             "Você é um especialista do mercado imobiliário e gestão condominial."
         ),
@@ -55,7 +55,7 @@ PERFIS = {
     },
     "energia": {
         "titulo": "⚡ <b>Radar do Setor Elétrico</b> ⚡",
-        "busca": "tarifa energia OR ANEEL OR bandeira tarifaria when:1d",
+        "busca": "tarifa energia OR ANEEL OR bandeira tarifaria when:4h",
         "persona": "Você é um analista do setor de energia elétrica brasileiro.",
         "criterio": (
             "mais relevantes para quem trabalha com medição e faturamento de energia"
@@ -69,13 +69,13 @@ PERFIS = {
     },
     "tecnologia": {
         "titulo": "💻 <b>Tech do Dia</b> 💻",
-        "busca": "inteligencia artificial OR desenvolvimento de software when:1d",
+        "busca": "inteligencia artificial OR desenvolvimento de software when:4h",
         "persona": "Você é um engenheiro de software sênior acompanhando o mercado.",
         "criterio": "mais relevantes para quem desenvolve software profissionalmente",
     },
     "local": {
         "titulo": "📍 <b>Recife Hoje</b> 📍",
-        "busca": "Recife OR Pernambuco when:1d",
+        "busca": "Recife OR Pernambuco when:4h",
         "persona": "Você é um jornalista local acompanhando a cidade.",
         "criterio": "de maior impacto no dia a dia de quem mora na região",
     },
