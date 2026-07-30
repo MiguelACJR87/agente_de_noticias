@@ -1,0 +1,50 @@
+# Este arquivo é o "bilhete" para o robô do GitHub Actions.
+# Ele diz: O QUE fazer, QUANDO fazer e COM QUAIS chaves.
+#
+# IMPORTANTE: nenhuma senha ou chave aparece aqui dentro.
+# Elas ficam guardadas nos Secrets do repositório.
+
+name: Resumo diário de notícias
+
+# ---------- QUANDO O ROBÔ TRABALHA ----------
+on:
+  schedule:
+    # O horário é sempre em UTC (fuso de Londres).
+    # Brasília é UTC-3, então SOME 3 horas ao horário que você quer.
+    # Quer 7h da manhã em Brasília? Escreva 10.
+    #
+    # Formato:  minuto  hora  dia-do-mês  mês  dia-da-semana
+    - cron: "0 10 * * *"
+
+  # Permite apertar um botão para rodar na hora, sem esperar o horário.
+  # Muito útil para testar.
+  workflow_dispatch:
+
+# ---------- O QUE O ROBÔ FAZ ----------
+jobs:
+  enviar-resumo:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. O robô pega uma cópia do seu código
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      # 2. Instala o Python na máquina dele
+      - name: Preparar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # 3. Instala as bibliotecas do requirements.txt
+      - name: Instalar as bibliotecas
+        run: pip install -r requirements.txt
+
+      # 4. Roda o script, entregando as chaves do cofre
+      - name: Rodar o bot
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          PERFIL_ATIVO: condominios
+        run: python automacao_sindico.py

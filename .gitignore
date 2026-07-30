@@ -1,0 +1,27 @@
+# Credenciais - NUNCA versionar
+.env
+.env.local
+*.key
+credentials.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Ferramentas
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+
+# Sistema operacional
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editores
+.vscode/
+.idea/
