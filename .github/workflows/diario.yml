@@ -9,7 +9,7 @@ name: Resumo diário de notícias
 # ---------- QUANDO O ROBÔ TRABALHA ----------
 on:
 schedule:
-  - cron: "*/5 * * * *"
+- cron: '*/5 * * * *'
 
   # Permite executar manualmente
   workflow_dispatch:
