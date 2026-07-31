@@ -30,7 +30,7 @@ load_dotenv()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-1.5-flash"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
 
 # ---------- DEDUPLICAÇÃO ----------
 JORNAL_DEDUP_JANELA_HORAS = int(os.environ.get("JORNAL_DEDUP_JANELA_HORAS") or 72)
@@ -84,7 +84,9 @@ PERFIS = {
 }
 
 PERFIL_ATIVO = os.environ.get("PERFIL_ATIVO") or "condominios"
-PERFIL = PERFIS[PERFIL_ATIVO]
+PERFIL = PERFIS.get(PERFIL_ATIVO)
+if PERFIL is None:
+    sys.exit(f"Perfil '{PERFIL_ATIVO}' não existe. Disponíveis: {', '.join(PERFIS)}")
 
 # ---------- COMPORTAMENTO ----------
 QUANTIDADE_FINAL = 6
@@ -495,26 +497,26 @@ def main():
         noticias = buscar_noticias_condominiais(cache)
     except Exception as erro:
         print(f"Erro ao buscar as notícias: {erro}")
-        return
+        sys.exit(1)
 
     if not noticias:
         print("Nenhuma notícia nova encontrada após as múltiplas buscas e filtragens de cache.")
-        return
+        sys.exit(1)
 
     try:
         escolhidas = selecionar_com_ia(client, noticias, cache)
     except Exception as erro:
         print(f"Erro na chamada ao Gemini: {erro}")
-        return
+        sys.exit(1)
 
     if not escolhidas:
         print("O modelo não selecionou nenhuma notícia. Nada enviado.")
-        return
+        sys.exit(1)
 
     mensagem = montar_mensagem(escolhidas)
     if not enviar_telegram(mensagem):
         print("Falha no envio. O cache não foi atualizado.")
-        return
+        sys.exit(1)
 
     registrar_envios(escolhidas, cache)
     gravar_cache(cache)
