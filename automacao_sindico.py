@@ -80,13 +80,110 @@ PERFIS = {
             "Caso existam diversas matérias sobre o mesmo assunto, escolha apenas a de melhor fonte. "
             "É ESTRITAMENTE PROIBIDO escolher manchetes ou fatos que já tenham aparecido no bloco 'JÁ ENVIADAS'."
         ),
-    }
+    },
+    "energia": {
+        "titulo": "⚡ <b>Radar de Energia</b> ⚡",
+        "buscas": [
+            "tarifa de energia", "ANEEL", "bandeira tarifária",
+            "conta de luz", "reajuste energia elétrica",
+            "energia solar", "geração distribuída",
+        ],
+        "persona": (
+            "Você é um analista do setor elétrico brasileiro, especializado em "
+            "tarifas, regulação da ANEEL e impacto dos custos de energia sobre "
+            "consumidores, condomínios e empresas."
+        ),
+        "criterio": (
+            "Escolha as notícias com maior impacto prático sobre tarifas, "
+            "regulação e custos de energia. Priorize reajustes, decisões da ANEEL, "
+            "mudanças de bandeira tarifária e novas regras. Desconsidere publicidade "
+            "e conteúdo promocional. É ESTRITAMENTE PROIBIDO escolher manchetes ou "
+            "fatos que já tenham aparecido no bloco 'JÁ ENVIADAS'."
+        ),
+    },
+    "saneamento": {
+        "titulo": "💧 <b>Radar de Saneamento</b> 💧",
+        "buscas": [
+            "saneamento básico", "tarifa de água", "abastecimento de água",
+            "concessionária de água", "marco legal do saneamento",
+            "esgotamento sanitário", "racionamento de água",
+        ],
+        "persona": (
+            "Você é um analista do setor de saneamento brasileiro, especializado "
+            "em tarifas de água, concessionárias e regulação do setor."
+        ),
+        "criterio": (
+            "Escolha as notícias com maior impacto sobre tarifas, abastecimento "
+            "e regulação do saneamento. Priorize reajustes, decisões regulatórias "
+            "e mudanças que afetem consumidores e condomínios. Desconsidere "
+            "publicidade. É ESTRITAMENTE PROIBIDO escolher manchetes ou fatos que "
+            "já tenham aparecido no bloco 'JÁ ENVIADAS'."
+        ),
+    },
+    "tecnologia": {
+        "titulo": "🤖 <b>Radar de Tecnologia</b> 🤖",
+        "buscas": [
+            "inteligência artificial", "desenvolvimento de software",
+            "segurança da informação", "automação", "startups Brasil",
+        ],
+        "persona": (
+            "Você é um editor de tecnologia focado em IA, desenvolvimento de "
+            "software e segurança da informação, com olhar prático para o que "
+            "muda o dia a dia de quem trabalha com tecnologia."
+        ),
+        "criterio": (
+            "Escolha as notícias mais relevantes sobre IA, ferramentas de "
+            "desenvolvimento e segurança. Priorize lançamentos, vulnerabilidades "
+            "e mudanças com efeito prático. Desconsidere publicidade e listas "
+            "genéricas. É ESTRITAMENTE PROIBIDO escolher manchetes ou fatos que "
+            "já tenham aparecido no bloco 'JÁ ENVIADAS'."
+        ),
+    },
+    "local": {
+        # Edite os termos de busca para a sua cidade/estado.
+        "titulo": "📍 <b>Notícias da Região</b> 📍",
+        "buscas": [
+            "Recife", "Pernambuco",
+        ],
+        "persona": (
+            "Você é um editor de jornal local, atento ao que realmente afeta o "
+            "cotidiano dos moradores da região."
+        ),
+        "criterio": (
+            "Escolha as notícias de maior interesse público local: serviços, "
+            "obras, segurança, economia e decisões do poder público. Desconsidere "
+            "notas policiais menores e publicidade. É ESTRITAMENTE PROIBIDO "
+            "escolher manchetes ou fatos que já tenham aparecido no bloco "
+            "'JÁ ENVIADAS'."
+        ),
+    },
+    "concorrencia": {
+        # Substitua pelos nomes das empresas que deseja monitorar.
+        "titulo": "🔎 <b>Radar de Mercado</b> 🔎",
+        "buscas": [
+            '"nome da empresa 1"', '"nome da empresa 2"',
+        ],
+        "persona": (
+            "Você é um analista de inteligência competitiva que monitora "
+            "movimentos de empresas específicas do mercado."
+        ),
+        "criterio": (
+            "Escolha as notícias que revelem movimentos relevantes das empresas "
+            "monitoradas: lançamentos, contratos, expansão, problemas jurídicos "
+            "ou financeiros. Desconsidere menções triviais. É ESTRITAMENTE "
+            "PROIBIDO escolher manchetes ou fatos que já tenham aparecido no "
+            "bloco 'JÁ ENVIADAS'."
+        ),
+    },
 }
 
 PERFIL_ATIVO = os.environ.get("PERFIL_ATIVO") or "condominios"
 PERFIL = PERFIS.get(PERFIL_ATIVO)
 if PERFIL is None:
-    sys.exit(f"Perfil '{PERFIL_ATIVO}' não existe. Disponíveis: {', '.join(PERFIS)}")
+    sys.exit(
+        f"Erro: o perfil '{PERFIL_ATIVO}' não existe. "
+        f"Perfis disponíveis: {', '.join(PERFIS)}"
+    )
 
 # ---------- COMPORTAMENTO ----------
 QUANTIDADE_FINAL = 6
@@ -501,7 +598,7 @@ def main():
 
     if not noticias:
         print("Nenhuma notícia nova encontrada após as múltiplas buscas e filtragens de cache.")
-        sys.exit(1)
+        return
 
     try:
         escolhidas = selecionar_com_ia(client, noticias, cache)
@@ -511,7 +608,7 @@ def main():
 
     if not escolhidas:
         print("O modelo não selecionou nenhuma notícia. Nada enviado.")
-        sys.exit(1)
+        return
 
     mensagem = montar_mensagem(escolhidas)
     if not enviar_telegram(mensagem):
