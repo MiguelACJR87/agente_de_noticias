@@ -1,45 +1,56 @@
-# Este arquivo é o "bilhete" para o robô do GitHub Actions.
-# Ele diz: O QUE fazer, QUANDO fazer e COM QUAIS chaves.
+# Workflow do GitHub Actions — versão corrigida
 #
-# IMPORTANTE: nenhuma senha ou chave aparece aqui dentro.
-# Elas ficam guardadas nos Secrets do repositório.
+# Mudanças em relação à versão anterior:
+#   1. GEMINI_MODEL agora é passado ao script (antes o Actions caía no
+#      padrão gemini-1.5-flash do código, que retorna 404).
+#   2. A pasta .cache é restaurada/salva entre execuções via actions/cache,
+#      fazendo a deduplicação de 72h funcionar também na nuvem.
+#   3. cache: pip acelera a instalação das bibliotecas.
 
 name: Resumo diário de notícias
 
-# ---------- QUANDO O ROBÔ TRABALHA ----------
 on:
   schedule:
-    - cron: "0 11 * * *"
-    - cron: "0 15 * * *"
-    - cron: "0 19 * * *"
-
+    - cron: "0 11 * * *"   # 08h em Brasília
+    - cron: "0 15 * * *"   # 12h em Brasília
+    - cron: "0 19 * * *"   # 16h em Brasília
   workflow_dispatch:
 
-# ---------- O QUE O ROBÔ FAZ ----------
 jobs:
   enviar-resumo:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. O robô pega uma cópia do seu código
       - name: Baixar o código
         uses: actions/checkout@v4
 
-      # 2. Instala o Python na máquina dele
       - name: Preparar o Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
 
-      # 3. Instala as bibliotecas do requirements.txt
+      # Restaura o cache de deduplicação da execução anterior.
+      # A chave é única por execução (run_id) porque o GitHub não permite
+      # sobrescrever um cache existente; o restore-keys "dedup-" recupera
+      # sempre o mais recente disponível.
+      - name: Restaurar o cache de deduplicação
+        uses: actions/cache@v4
+        with:
+          path: .cache
+          key: dedup-${{ github.run_id }}
+          restore-keys: |
+            dedup-
+
       - name: Instalar as bibliotecas
         run: pip install -r requirements.txt
 
-      # 4. Roda o script, entregando as chaves do cofre
       - name: Rodar o bot
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Use aqui o mesmo modelo que funciona no seu .env local
+          GEMINI_MODEL: gemini-3.6-flash
           PERFIL_ATIVO: condominios
         run: python automacao_sindico.py
