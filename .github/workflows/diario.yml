@@ -8,15 +8,8 @@ name: Resumo diário de notícias
 
 # ---------- QUANDO O ROBÔ TRABALHA ----------
 on:
-  schedule:
-    # 08:00 (Horário de Brasília = 11:00 UTC)
-    - cron: "0 11 * * *"
-
-    # 12:00 (Horário de Brasília = 15:00 UTC)
-    - cron: "0 15 * * *"
-
-    # 16:00 (Horário de Brasília = 19:00 UTC)
-    - cron: "0 19 * * *"
+schedule:
+  - cron: "*/5 * * * *"
 
   # Permite executar manualmente
   workflow_dispatch:
