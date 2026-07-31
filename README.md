@@ -1,21 +1,22 @@
 # Bot de Notícias com Curadoria por IA
 
-Motor de monitoramento em Python que coleta notícias de uma fonte configurável,
-usa a API do Gemini para selecionar as mais relevantes segundo um critério que
-você define, e entrega o resumo no Telegram.
+Motor de monitoramento em Python que coleta notícias de múltiplas buscas no
+Google News, remove o que já foi enviado nos últimos dias, usa a API do Gemini
+para selecionar as mais relevantes segundo um critério que você define, e
+entrega um boletim formatado no Telegram.
 
-Nasceu como um bot de notícias condominiais, mas a fonte, o critério de
-julgamento e o formato de saída são todos parametrizáveis — o mesmo motor
-serve para monitorar tarifas de energia, movimentos de concorrentes, editais
-de licitação ou qualquer outro recorte de informação.
+Nasceu como um bot de notícias condominiais, mas o comportamento inteiro é
+definido por **perfis** — o mesmo motor serve para monitorar tarifas de
+energia, saneamento, tecnologia, notícias locais ou movimentos de
+concorrentes.
 
 ```
-┌──────────┐    ┌─────────────┐    ┌──────────┐    ┌──────────┐
-│  FONTE   │ -> │  CURADORIA  │ -> │ MONTAGEM │ -> │  ENTREGA │
-│ RSS/HTML │    │   (Gemini)  │    │ (Python) │    │(Telegram)│
-└──────────┘    └─────────────┘    └──────────┘    └──────────┘
-  trocável        critério          links do          canal
-                  definido          feed puro       trocável
+┌──────────┐   ┌────────────┐   ┌─────────────┐   ┌──────────┐   ┌──────────┐
+│  FONTES  │ → │   DEDUP    │ → │  CURADORIA  │ → │ MONTAGEM │ → │  ENTREGA │
+│ RSS multi│   │ (cache 72h)│   │   (Gemini)  │   │ (Python) │   │(Telegram)│
+└──────────┘   └────────────┘   └─────────────┘   └──────────┘   └──────────┘
+  trocáveis      não repete       critério          links do        canal
+                 o já enviado     definido          feed puro       trocável
 ```
 
 ---
@@ -26,7 +27,8 @@ de licitação ou qualquer outro recorte de informação.
 - [Configurar o Telegram (passo a passo)](#configurar-o-telegram-passo-a-passo)
 - [Configurar a API do Gemini](#configurar-a-api-do-gemini)
 - [Primeira execução](#primeira-execução)
-- [Adaptando para outras finalidades](#adaptando-para-outras-finalidades)
+- [Perfis: adaptando para outras finalidades](#perfis-adaptando-para-outras-finalidades)
+- [Deduplicação: por que o bot não se repete](#deduplicação-por-que-o-bot-não-se-repete)
 - [Dominando a busca do Google News](#dominando-a-busca-do-google-news)
 - [Trocando a fonte: outros feeds e scraping](#trocando-a-fonte-outros-feeds-e-scraping)
 - [Agendamento](#agendamento)
@@ -40,8 +42,8 @@ de licitação ou qualquer outro recorte de informação.
 Requer Python 3.9 ou superior.
 
 ```bash
-git clone https://github.com/MiguelACJR87/bot-noticias-condominiais.git
-cd bot-noticias-condominiais
+git clone https://github.com/MiguelACJR87/agente_de_noticias.git
+cd agente_de_noticias
 pip install -r requirements.txt
 ```
 
@@ -179,12 +181,12 @@ TELEGRAM_CHAT_ID=@nome_do_seu_canal
 
 Ainda no BotFather, alguns comandos deixam o bot com cara de produto:
 
-| Comando | O que faz |
-|---|---|
+| Comando           | O que faz                                        |
+| ----------------- | ------------------------------------------------ |
 | `/setdescription` | Texto exibido antes de alguém iniciar a conversa |
-| `/setabouttext` | Descrição curta no perfil do bot |
-| `/setuserpic` | Define a foto de perfil |
-| `/setcommands` | Cadastra o menu de comandos |
+| `/setabouttext`   | Descrição curta no perfil do bot                 |
+| `/setuserpic`     | Define a foto de perfil                          |
+| `/setcommands`    | Cadastra o menu de comandos                      |
 
 ---
 
@@ -198,8 +200,8 @@ novo automaticamente).
 
 **3.** Copie a chave gerada. Ela aparece uma única vez de forma completa.
 
-O plano gratuito do AI Studio tem cota diária suficiente para uma execução por
-dia com folga — este bot faz **uma única chamada** por execução.
+O plano gratuito do AI Studio tem cota diária suficiente — este bot faz
+**uma única chamada** ao modelo por execução.
 
 ---
 
@@ -219,7 +221,7 @@ nano .env
 
 Preencha assim:
 
-```env
+```
 GEMINI_API_KEY=AIzaSyD...
 TELEGRAM_BOT_TOKEN=7891234567:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw
 TELEGRAM_CHAT_ID=936478817
@@ -227,7 +229,8 @@ GEMINI_MODEL=
 PERFIL_ATIVO=
 ```
 
-Os dois últimos podem ficar vazios — o script usa os padrões.
+Os demais campos podem ficar vazios — o script usa os padrões
+(`gemini-3.6-flash` e o perfil `condominios`).
 
 Rode:
 
@@ -238,58 +241,70 @@ python automacao_sindico.py
 Saída esperada:
 
 ```
-1. Buscando notícias recentes [perfil: condominios]...
--> 17 notícias encontradas.
-2. Analisando as notícias com o Gemini (gemini-3.6-flash)...
--> 6 notícias selecionadas.
-3. Montando a mensagem e resolvendo os links...
-4. Enviando o resumo final para o Telegram...
--> Mensagem entregue com sucesso no seu celular!
+1. Realizando múltiplas buscas no Google News [perfil: condominios]...
+-> 87 notícias únicas encontradas no total; 12 descartadas por já constarem no cache.
+2. Analisando 50 notícias com o modelo gemini-3.6-flash...
+-> 6 notícias selecionadas com sucesso.
+3. Montando a mensagem com os novos metadados e resolvendo os links...
+4. Enviando o resumo final de inteligência para o Telegram...
+-> Boletim entregue com sucesso!
+[dedup] 6 entradas gravadas em cache.
 ```
 
-> O arquivo `.env` está no `.gitignore` e não vai para o repositório.
+> O arquivo `.env` está no `.gitignore` e não vai para o repositório. O mesmo
+> vale para a pasta `.cache/`, criada automaticamente na primeira execução.
 
 ---
 
-## Adaptando para outras finalidades
+## Perfis: adaptando para outras finalidades
 
 Aqui está o coração do projeto. O comportamento inteiro é definido por um
-**perfil** — um bloco de quatro campos no topo do script.
+**perfil** — um bloco de quatro campos no dicionário `PERFIS`, no topo do
+script.
 
 ```python
-PERFIS = {
-    "condominios": {
-        "titulo": "🏢 <b>As Notícias Condominiais do Dia</b> 🏢",
-        "busca": "condominio OR sindico when:1d",
-        "persona": "Você é um especialista do mercado imobiliário e gestão condominial.",
-        "criterio": "mais impactantes, urgentes ou relevantes para síndicos e moradores",
-    },
-}
+"energia": {
+    "titulo": "⚡ <b>Radar de Energia</b> ⚡",
+    "buscas": [
+        "tarifa de energia", "ANEEL", "bandeira tarifária",
+        "conta de luz", "reajuste energia elétrica",
+    ],
+    "persona": "Você é um analista do setor elétrico brasileiro...",
+    "criterio": "Escolha as notícias com maior impacto prático sobre tarifas...",
+},
 ```
 
-| Campo | Função |
-|---|---|
-| `titulo` | Cabeçalho da mensagem no Telegram. Aceita as tags `<b>` e `<i>` |
-| `busca` | Consulta enviada ao Google News. Define **o que entra** no funil |
-| `persona` | Quem o modelo "é" ao julgar. Define a lente da análise |
-| `criterio` | O que torna uma notícia relevante. Define **o que sai** do funil |
+| Campo      | Função                                                                  |
+| ---------- | ----------------------------------------------------------------------- |
+| `titulo`   | Cabeçalho da mensagem no Telegram. Aceita as tags `<b>` e `<i>`         |
+| `buscas`   | **Lista** de consultas independentes ao Google News. Define o que entra |
+| `persona`  | Quem o modelo "é" ao julgar. Define a lente da análise                  |
+| `criterio` | O que torna uma notícia relevante. Define o que sai do funil            |
+
+Cada item de `buscas` vira uma consulta separada ao Google News (com a janela
+`when:1d` acrescentada automaticamente pelo script). Os resultados de todas as
+buscas são agregados, deduplicados por link e ordenados do mais recente para o
+mais antigo antes de irem ao modelo.
 
 Trocar de finalidade é trocar uma linha no `.env`:
 
-```env
-PERFIL_ATIVO=tecnologia
+```
+PERFIL_ATIVO=energia
 ```
 
 ### Perfis já incluídos
 
-| Perfil | Monitora |
-|---|---|
-| `condominios` | Gestão condominial, síndicos, legislação do setor |
-| `energia` | Tarifas, ANEEL, bandeiras tarifárias |
-| `saneamento` | Água, saneamento, concessionárias regionais |
-| `tecnologia` | IA e desenvolvimento de software |
-| `local` | Notícias de uma cidade ou estado |
-| `concorrencia` | Menções a empresas específicas |
+| Perfil         | Monitora                                                       |
+| -------------- | -------------------------------------------------------------- |
+| `condominios`  | Gestão condominial, legislação, decisões judiciais, segurança  |
+| `energia`      | Tarifas, ANEEL, bandeiras tarifárias, energia solar            |
+| `saneamento`   | Água, esgoto, concessionárias, marco legal do saneamento       |
+| `tecnologia`   | IA, desenvolvimento de software, segurança da informação       |
+| `local`        | Notícias de uma cidade ou estado (edite os termos de busca)    |
+| `concorrencia` | Menções a empresas específicas (substitua os nomes de exemplo) |
+
+Os perfis `local` e `concorrencia` são modelos: abra o script e troque os
+termos da lista `buscas` pelos seus.
 
 ### Criando o seu
 
@@ -299,20 +314,13 @@ oportunidades públicas:
 ```python
 "licitacoes": {
     "titulo": "📋 <b>Radar de Licitações</b> 📋",
-    "busca": "licitacao OR pregao eletronico OR edital when:2d",
+    "buscas": ["licitacao", "pregao eletronico", "edital"],
     "persona": "Você é um analista comercial especializado em vendas para o setor público.",
-    "criterio": "que representam oportunidades reais de negócio para prestadores de serviço",
-},
-```
-
-Ou para acompanhar um tema regulatório:
-
-```python
-"regulatorio": {
-    "titulo": "⚖️ <b>Alertas Regulatórios</b> ⚖️",
-    "busca": "LGPD OR ANPD OR protecao de dados when:3d",
-    "persona": "Você é um advogado especializado em proteção de dados.",
-    "criterio": "que exigem alguma adequação prática por parte das empresas",
+    "criterio": (
+        "Escolha as notícias que representam oportunidades reais de negócio "
+        "para prestadores de serviço. É ESTRITAMENTE PROIBIDO escolher "
+        "manchetes que já tenham aparecido no bloco 'JÁ ENVIADAS'."
+    ),
 },
 ```
 
@@ -325,30 +333,19 @@ ranking e como o motivo é escrito.
 
 ```python
 QUANTIDADE_FINAL = 6          # quantas notícias entram no resumo
-MAX_NOTICIAS_ANALISADAS = 30  # quantas manchetes o modelo avalia
+MAX_NOTICIAS_ANALISADAS = 50  # quantas manchetes o modelo avalia
 ```
 
 Aumentar `MAX_NOTICIAS_ANALISADAS` dá mais material para o modelo escolher, ao
-custo de um prompt maior. Para nichos com pouco volume, combine com uma janela
-de tempo mais larga (`when:7d`) em vez de aumentar esse número.
+custo de um prompt maior. Para nichos com pouco volume, prefira adicionar mais
+termos à lista `buscas` do perfil.
 
 ### Mudando o formato da saída
 
-O JSON pedido ao modelo define a estrutura. Para incluir uma classificação de
-urgência, por exemplo, adicione o campo em `montar_prompt()`:
-
-```
-  "urgencia" - "alta", "media" ou "baixa"
-```
-
-E use em `montar_mensagem()`:
-
-```python
-selo = {"alta": "🔴", "media": "🟡", "baixa": "🟢"}
-bloco = f"{selo.get(noticia['urgencia'], '')} {noticia['emoji']} <b>{titulo}</b>"
-```
-
-Lembre de propagar o campo novo no loop de `selecionar_com_ia()`.
+O JSON pedido ao modelo já inclui, para cada notícia: `emoji`, `categoria`,
+`impacto` (nota de 1 a 10), `motivo`, `publico` e `urgencia`. Para adicionar
+um campo novo, inclua-o na especificação dentro de `montar_prompt()`, propague
+no loop de `selecionar_com_ia()` e use em `montar_mensagem()`.
 
 ### Trocando o canal de entrega
 
@@ -366,24 +363,63 @@ def enviar_discord(mensagem):
 
 ---
 
+## Deduplicação: por que o bot não se repete
+
+Rodando mais de uma vez por dia, o mesmo fato tende a reaparecer — no mesmo
+link ou requentado por outro veículo. O bot combate isso em três camadas:
+
+**1. Dedup por link na coleta.** Buscas diferentes retornam matérias
+repetidas; a agregação descarta links já vistos na mesma execução.
+
+**2. Cache persistente de envios.** Cada notícia enviada é registrada em
+`.cache/noticias_enviadas.json` com um hash de link+título. Nas execuções
+seguintes, tudo que está no cache é filtrado antes mesmo de chegar ao modelo.
+As entradas expiram após a janela configurada (72h por padrão).
+
+**3. Bloco "JÁ ENVIADAS" no prompt.** Os títulos mais recentes do cache são
+mostrados ao Gemini com a instrução de não repetir o mesmo fato nem por outro
+ângulo ou veículo — cobrindo o caso em que o link é novo mas a notícia não é.
+
+Configuração pelo `.env` (todas opcionais):
+
+```
+JORNAL_DEDUP_JANELA_HORAS=72
+JORNAL_DEDUP_ARQUIVO=.cache/noticias_enviadas.json
+JORNAL_DEDUP_HISTORICO_GEMINI=30
+```
+
+Para zerar o histórico e recomeçar:
+
+```bash
+python automacao_sindico.py --resetar-cache
+```
+
+> No GitHub Actions o runner é descartado após cada execução — o cache só
+> persiste lá porque o workflow restaura e salva a pasta `.cache` com
+> `actions/cache`. Veja a seção [Agendamento](#agendamento).
+
+---
+
 ## Dominando a busca do Google News
 
-O campo `busca` aceita operadores que refinam bastante o resultado.
+Cada item da lista `buscas` aceita operadores que refinam bastante o
+resultado. A janela `when:1d` é acrescentada automaticamente pelo script — não
+inclua `when:` nos seus termos (para mudar a janela, edite a montagem da URL
+em `buscar_noticias_condominiais()`).
 
-| Operador | Efeito | Exemplo |
-|---|---|---|
-| `OR` | Qualquer um dos termos | `condominio OR sindico` |
-| `"aspas"` | Expressão exata | `"convenção de condomínio"` |
-| `-` | Exclui o termo | `energia -futebol` |
-| `when:` | Janela de tempo | `when:1h`, `when:1d`, `when:7d` |
-| `site:` | Restringe a um domínio | `site:g1.globo.com` |
-| `intitle:` | Só no título da matéria | `intitle:tarifa` |
-| `allintext:` | Todos os termos no corpo | `allintext:sindico multa` |
+| Operador     | Efeito                   | Exemplo                     |
+| ------------ | ------------------------ | --------------------------- |
+| `OR`         | Qualquer um dos termos   | `condominio OR sindico`     |
+| `"aspas"`    | Expressão exata          | `"convenção de condomínio"` |
+| `-`          | Exclui o termo           | `energia -futebol`          |
+| `site:`      | Restringe a um domínio   | `site:g1.globo.com`         |
+| `intitle:`   | Só no título da matéria  | `intitle:tarifa`            |
+| `allintext:` | Todos os termos no corpo | `allintext:sindico multa`   |
 
 Combinando:
 
 ```python
-"busca": '"gestão condominial" OR intitle:sindico -futebol when:2d'
+"buscas": ['"gestão condominial" -futebol', "intitle:sindico"],
 ```
 
 ### Idioma e região
@@ -410,17 +446,17 @@ tendências internacionais antes de chegarem ao Brasil.
 ### Feeds temáticos e geográficos
 
 Além da busca, o Google News expõe feeds prontos. Para usá-los, substitua a
-montagem de `URL_RSS`:
+montagem da URL:
 
 ```python
 # Por tópico: BUSINESS, TECHNOLOGY, SCIENCE, HEALTH, SPORTS, ENTERTAINMENT
-URL_RSS = (
+url = (
     f"https://news.google.com/rss/headlines/section/topic/TECHNOLOGY"
     f"?hl={IDIOMA}&gl={REGIAO}&ceid={EDICAO}"
 )
 
 # Por localidade
-URL_RSS = (
+url = (
     f"https://news.google.com/rss/headlines/section/geo/Recife"
     f"?hl={IDIOMA}&gl={REGIAO}&ceid={EDICAO}"
 )
@@ -431,8 +467,8 @@ URL_RSS = (
 ## Trocando a fonte: outros feeds e scraping
 
 O Google News é o padrão por conveniência, mas a arquitetura não depende dele.
-Qualquer função que devolva uma lista de dicionários com `titulo`, `link` e
-`fonte` pode substituir a `buscar_noticias_condominiais()`.
+Qualquer função que devolva uma lista de dicionários com `titulo`, `link`,
+`fonte` e `timestamp` pode substituir a `buscar_noticias_condominiais()`.
 
 ### Ordem de preferência das fontes
 
@@ -454,30 +490,17 @@ partir para o HTML.
 FEEDS = [
     "https://www.sindiconet.com.br/feed",
     "https://exemplo.com.br/categoria/condominios/feed",
-    URL_RSS,  # o Google News continua na jogada
 ]
 
-def buscar_noticias_condominiais():
-    print(f"1. Buscando notícias recentes [perfil: {PERFIL_ATIVO}]...")
-    noticias = []
-    vistos = set()
+for url in FEEDS:
+    feed = feedparser.parse(url)
+    origem = feed.feed.get("title", "")
 
-    for url in FEEDS:
-        feed = feedparser.parse(url)
-        origem = feed.feed.get("title", "")
-
-        for entrada in feed.entries[:15]:
-            if entrada.link in vistos:
-                continue
-            vistos.add(entrada.link)
-            noticias.append({
-                "titulo": entrada.title,
-                "link": entrada.link,
-                "fonte": origem,
-            })
-
-    print(f"-> {len(noticias)} notícias encontradas.")
-    return noticias[:MAX_NOTICIAS_ANALISADAS]
+    for entrada in feed.entries[:15]:
+        if entrada.link in links_vistos:
+            continue
+        links_vistos.add(entrada.link)
+        # monte o dicionário como no loop original
 ```
 
 A deduplicação por link é essencial aqui — a mesma matéria costuma aparecer em
@@ -524,6 +547,7 @@ def buscar_via_scraping(url_base, seletor):
             "titulo": titulo,
             "link": urljoin(url_base, href),  # resolve links relativos
             "fonte": url_base,
+            "timestamp": 0,
         })
 
     return noticias
@@ -589,24 +613,11 @@ que é o que um agregador legitimamente faz.
 **Espace as requisições.** Um `time.sleep(2)` entre páginas é o mínimo. Sem
 isso você gera picos de carga que parecem ataque.
 
-```python
-import time
-
-for url in urls:
-    coletar(url)
-    time.sleep(2)
-```
-
 **Identifique-se.** Um User-Agent honesto com forma de contato é cortesia e
-evita bloqueios:
-
-```python
-USER_AGENT = "RadarCondominial/1.0 (+https://github.com/seu-usuario/seu-repo)"
-```
+evita bloqueios.
 
 **Cacheie durante o desenvolvimento.** Enquanto você ajusta os seletores,
-salve o HTML em disco e trabalhe sobre o arquivo. Não faça vinte requisições
-ao servidor alheio para testar uma expressão regular.
+salve o HTML em disco e trabalhe sobre o arquivo.
 
 **Falhe com elegância.** Sites mudam. Envolva a coleta em `try/except` e trate
 lista vazia como situação normal, não como erro fatal.
@@ -614,6 +625,69 @@ lista vazia como situação normal, não como erro fatal.
 ---
 
 ## Agendamento
+
+### GitHub Actions (recomendado)
+
+Roda na nuvem, sem depender da sua máquina. O workflow está em
+`.github/workflows/diario.yml`:
+
+```yaml
+name: Resumo diário de notícias
+
+on:
+  schedule:
+    - cron: "0 11 * * *"   # 08h em Brasília
+    - cron: "0 15 * * *"   # 12h em Brasília
+    - cron: "0 19 * * *"   # 16h em Brasília
+  workflow_dispatch:
+
+jobs:
+  enviar-resumo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Persiste a pasta .cache entre execuções (o runner é efêmero).
+      # A chave é única por execução porque o GitHub não sobrescreve
+      # um cache existente; o restore-keys recupera o mais recente.
+      - uses: actions/cache@v4
+        with:
+          path: .cache
+          key: dedup-${{ github.run_id }}
+          restore-keys: |
+            dedup-
+
+      - run: pip install -r requirements.txt
+      - run: python automacao_sindico.py
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_MODEL: gemini-3.6-flash
+          PERFIL_ATIVO: condominios
+```
+
+As credenciais vão em **Settings → Secrets and variables → Actions → New
+repository secret**. Nunca no arquivo YAML.
+
+Pontos importantes:
+
+- **Os horários do cron são em UTC.** Brasília é UTC−3, então `0 11 * * *`
+  roda às 8h locais.
+- **O passo `actions/cache` é o que faz a deduplicação funcionar na nuvem.**
+  Sem ele, cada execução começa com o cache vazio e as notícias se repetem
+  entre os horários do dia.
+- **O GitHub desativa agendamentos após 60 dias sem atividade** em
+  repositórios públicos. Chega um e-mail avisando; qualquer commit ou a
+  reativação manual na aba Actions resolve.
+- Para validar sem esperar o cron, use **Actions → Resumo diário de notícias
+  → Run workflow**.
+- Para rodar vários perfis, duplique o passo final com um `PERFIL_ATIVO`
+  diferente.
 
 ### Windows — Agendador de Tarefas
 
@@ -629,17 +703,17 @@ lista vazia como situação normal, não como erro fatal.
 
 **6.** Preencha:
 
-| Campo | Valor |
-|---|---|
-| Programa | `C:\Users\SEU_USUARIO\anaconda3\python.exe` |
-| Argumentos | `automacao_sindico.py` |
+| Campo      | Valor                                                |
+| ---------- | ---------------------------------------------------- |
+| Programa   | `C:\Users\SEU_USUARIO\anaconda3\python.exe`          |
+| Argumentos | `automacao_sindico.py`                               |
 | Iniciar em | `C:\Users\SEU_USUARIO\Desktop\Projetos\bot_noticias` |
 
 O campo **Iniciar em** é obrigatório — sem ele o script não encontra o `.env`.
 
 Para descobrir o caminho do seu Python:
 
-```powershell
+```
 where python
 ```
 
@@ -655,42 +729,6 @@ Adicione (todo dia às 7h):
 0 7 * * * cd /caminho/do/projeto && /usr/bin/python3 automacao_sindico.py >> log.txt 2>&1
 ```
 
-### GitHub Actions
-
-Roda na nuvem, sem depender da sua máquina. Crie
-`.github/workflows/diario.yml`:
-
-```yaml
-name: Resumo diário
-
-on:
-  schedule:
-    - cron: "0 10 * * *"  # 10h UTC = 7h em Brasília
-  workflow_dispatch:
-
-jobs:
-  executar:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - run: pip install -r requirements.txt
-      - run: python automacao_sindico.py
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          PERFIL_ATIVO: condominios
-```
-
-As credenciais vão em **Settings → Secrets and variables → Actions → New
-repository secret**. Nunca no arquivo YAML.
-
-Um bônus dessa abordagem: para rodar vários perfis, basta duplicar o step com
-um `PERFIL_ATIVO` diferente.
-
 ---
 
 ## Decisões técnicas
@@ -704,9 +742,10 @@ raciocínio por trás de cada solução.
 pedia a mensagem já formatada de volta. Os links chegavam quebrados no
 Telegram.
 
-**Causa.** As URLs do RSS do Google News são strings base64 de 200+ caracteres.
-Um LLM não copia isso de forma confiável — ele trunca, altera um caractere ou
-completa o padrão de memória. O resultado parece uma URL válida, mas não é.
+**Causa.** As URLs do RSS do Google News são strings base64 de 200+
+caracteres. Um LLM não copia isso de forma confiável — ele trunca, altera um
+caractere ou completa o padrão de memória. O resultado parece uma URL válida,
+mas não é.
 
 **Solução.** Inverter a responsabilidade. O modelo devolve apenas um JSON com
 o *índice* da notícia escolhida, e o Python remonta a mensagem usando o link
@@ -730,6 +769,15 @@ alternativa seria espalhar strings pelo código e duplicar o script para cada
 uso — o que multiplica a manutenção. Com perfis, corrigir um bug beneficia
 todas as finalidades de uma vez.
 
+### Deduplicação em três camadas
+
+Com múltiplas buscas por execução e múltiplas execuções por dia, a repetição
+deixou de ser exceção e virou o caso comum. O hash de link+título em cache
+resolve a repetição exata; o bloco "JÁ ENVIADAS" no prompt resolve a
+repetição semântica (mesmo fato, outro veículo). O cache é gravado de forma
+atômica (arquivo temporário + `replace`) e só é atualizado **depois** do
+envio bem-sucedido ao Telegram — falha no envio não "queima" as notícias.
+
 ### Sanitização antes do Telegram
 
 O `parse_mode="HTML"` do Telegram aceita um conjunto restrito de tags e
@@ -747,10 +795,9 @@ link original — que continua funcionando. Degradação graciosa em vez de erro
 ### Modelos do Gemini mudam de nome
 
 A versão inicial usava `gemini-1.5-flash-latest` e passou a retornar 404
-quando a família 1.5 foi descontinuada. O tratamento de erro agora detecta o
-404 e lista os modelos disponíveis para a chave, transformando uma falha opaca
-em diagnóstico. O modelo também é configurável por variável de ambiente, sem
-alterar o código.
+quando a família 1.5 foi descontinuada. O modelo agora é configurável pela
+variável de ambiente `GEMINI_MODEL`, sem alterar o código — tanto no `.env`
+local quanto no workflow do Actions.
 
 ### Nova tentativa automática para erros temporários do Gemini
 
@@ -765,35 +812,47 @@ primeiros, com espera crescente entre tentativas (5s, 10s, 20s). Um erro
 permanente sobe na hora — tentar de novo não mudaria o resultado, só
 atrasaria o diagnóstico.
 
+### Códigos de saída honestos
+
+Erros de busca, de Gemini ou de envio terminam com `sys.exit(1)`. No GitHub
+Actions isso marca a execução com ❌ e dispara a notificação de falha — sem
+isso, o workflow ficaria verde mesmo quebrado e ninguém saberia. "Nenhuma
+notícia nova" continua saindo com código 0: é uma situação normal, não um
+erro.
+
 ### Credenciais fora do código
 
 Chave de API e token de bot ficam em `.env`, carregado por `python-dotenv` e
 ignorado pelo Git. O `.env.example` documenta quais variáveis existem sem
-revelar valores. A função `validar_config()` falha logo na inicialização com
-uma mensagem clara, em vez de deixar o erro aparecer como uma exceção confusa
-da API mais adiante.
+revelar valores. No Actions, as mesmas variáveis vêm dos Secrets do
+repositório. A função `validar_config()` falha logo na inicialização com uma
+mensagem clara, em vez de deixar o erro aparecer como uma exceção confusa da
+API mais adiante.
 
 ---
 
 ## Solução de problemas
 
-| Sintoma | Causa provável | Correção |
-|---|---|---|
-| `chat not found` | O bot nunca recebeu mensagem sua | Envie `/start` ao bot e reveja o chat ID |
-| `401 Unauthorized` | Token inválido ou revogado | Confira o `TELEGRAM_BOT_TOKEN` no `.env` |
-| `404 NOT_FOUND` no Gemini | Modelo descontinuado | O script lista os disponíveis; escolha um |
-| `503 UNAVAILABLE` no Gemini | Sobrecarga temporária no servidor do Google | O script já tenta de novo sozinho; se persistir, aguarde alguns minutos |
-| `Bad Request: can't parse entities` | Tag HTML não suportada | Verifique se o `html.escape()` foi removido |
-| `0 notícias encontradas` | Busca restritiva demais | Amplie a janela (`when:7d`) ou os termos |
-| `getUpdates` retorna vazio | Nenhuma mensagem registrada | Mande algo ao bot e recarregue |
-| Grupo não aparece no `getUpdates` | Modo privacidade ativo | `/setprivacy` → **Disable** no BotFather |
-| Variáveis não carregam | `.env` fora da pasta do script | Use **Iniciar em** no agendador |
+| Sintoma                             | Causa provável                              | Correção                                                                |
+| ----------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
+| `chat not found`                    | O bot nunca recebeu mensagem sua            | Envie `/start` ao bot e reveja o chat ID                                 |
+| `401 Unauthorized`                  | Token inválido ou revogado                  | Confira o `TELEGRAM_BOT_TOKEN` no `.env` ou nos Secrets                  |
+| `404 NOT_FOUND` no Gemini           | Modelo descontinuado ou nome errado         | Ajuste `GEMINI_MODEL` no `.env` e no workflow                            |
+| `503 UNAVAILABLE` no Gemini         | Sobrecarga temporária no servidor do Google | O script já tenta de novo sozinho; se persistir, aguarde alguns minutos  |
+| `Bad Request: can't parse entities` | Tag HTML não suportada                      | Verifique se o `html.escape()` foi removido                              |
+| `0 notícias encontradas`            | Buscas restritivas ou tudo já enviado       | Adicione termos à lista `buscas` ou rode com `--resetar-cache`           |
+| Notícias repetidas no Actions       | Passo `actions/cache` ausente no workflow   | Adicione o passo que restaura/salva a pasta `.cache`                     |
+| `O perfil 'x' não existe`           | `PERFIL_ATIVO` com valor inválido           | Use um dos perfis listados na mensagem de erro                           |
+| Workflow parou de rodar sozinho     | 60 dias sem atividade no repositório        | Reative na aba Actions ou faça qualquer commit                           |
+| `getUpdates` retorna vazio          | Nenhuma mensagem registrada                 | Mande algo ao bot e recarregue                                           |
+| Grupo não aparece no `getUpdates`   | Modo privacidade ativo                      | `/setprivacy` → **Disable** no BotFather                                 |
+| Variáveis não carregam              | `.env` fora da pasta do script              | Use **Iniciar em** no agendador                                          |
 
 ---
 
 ## Stack
 
-`feedparser` · `requests` · `google-genai` · `python-dotenv` · Telegram Bot API
+`feedparser` · `requests` · `google-genai` · `python-dotenv` · Telegram Bot API · GitHub Actions
 
 ## Licença
 
