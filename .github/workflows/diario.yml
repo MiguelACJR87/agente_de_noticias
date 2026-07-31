@@ -14,7 +14,6 @@ on:
     - cron: "17 11 * * *"   # 08h17 em Brasília
     - cron: "5 13 * * *"    # 10h05 em Brasília
     - cron: "21 17 * * *"   # 14h21 em Brasília
-    - cron: "45 18 * * *"   # 15h45 em Brasília
     - cron: "31 19 * * *"   # 16h31 em Brasília
   workflow_dispatch:
 
