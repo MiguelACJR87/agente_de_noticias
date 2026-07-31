@@ -1,28 +1,21 @@
 """
-Bot de Notícias Condominiais
-----------------------------
-Busca notícias das últimas 24h no Google News, seleciona as mais
-relevantes com o Gemini e envia o resumo para o Telegram.
-
-Os links nunca passam pelo modelo: o Gemini devolve apenas o número
-da notícia escolhida e o Python monta a mensagem com a URL original
-do feed, evitando links truncados ou alterados.
-
-Configuração:
-    Copie o arquivo .env.example para .env e preencha os valores.
-    O .env está no .gitignore e não vai para o repositório.
-
-Uso:
-    pip install -r requirements.txt
-    python automacao_sindico.py
+Bot de Notícias Condominiais Profissional
+-----------------------------------------
+Busca notícias nas últimas 24h utilizando múltiplas palavras-chave no Google News,
+agrega, remove duplicadas, ordena por data e envia para o Gemini selecionar as
+mais relevantes de acordo com critérios investigativos rigorosos.
 """
 
+import argparse
+import hashlib
 import html
 import json
 import os
 import re
 import sys
 import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import quote
 
 import feedparser
@@ -37,159 +30,227 @@ load_dotenv()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-1.5-flash"
 
-# ---------- PERFIS ----------
-# Cada perfil define O QUE buscar, COMO julgar e COMO apresentar.
-# Troque PERFIL_ATIVO para mudar completamente a finalidade do bot.
-# Para criar o seu, copie um bloco abaixo e ajuste os quatro campos.
+# ---------- DEDUPLICAÇÃO ----------
+JORNAL_DEDUP_JANELA_HORAS = int(os.environ.get("JORNAL_DEDUP_JANELA_HORAS") or 72)
+JORNAL_DEDUP_ARQUIVO = Path(
+    os.environ.get("JORNAL_DEDUP_ARQUIVO") or ".cache/noticias_enviadas.json"
+)
+JORNAL_DEDUP_HISTORICO_GEMINI = int(
+    os.environ.get("JORNAL_DEDUP_HISTORICO_GEMINI") or 30
+)
 
+# ---------- PERFIS E BUSCAS ----------
 PERFIS = {
     "condominios": {
-        "titulo": "🏢 <b>As Notícias Condominiais do Dia</b> 🏢",
-        "busca": "condominio OR sindico when:4h",
+        "titulo": "🏢 <b>Boletim de Inteligência Condominial</b> 🏢",
+        "buscas": [
+            "condominio", "condomínios", "síndico", "sindica", 
+            "administração condominial", "gestão condominial", 
+            "assembleia de condomínio", "taxa condominial", 
+            "portaria remota", "segurança condominial", 
+            "condomínio residencial", "condomínio comercial", 
+            "mercado imobiliário", "manutenção predial", 
+            "elevador", "incêndio condomínio", 
+            "STJ condomínio", "decisão judicial condomínio", 
+            "LGPD condomínio", "inteligência artificial condomínios"
+        ],
         "persona": (
-            "Você é um especialista do mercado imobiliário e gestão condominial."
+            "Você é um jornalista investigativo especializado no mercado condominial brasileiro. "
+            "Possui experiência em administração de condomínios, direito condominial, gestão predial, "
+            "mercado imobiliário, segurança, tecnologia e políticas públicas. "
+            "Sua missão é identificar fatos realmente importantes, ignorando matérias superficiais, "
+            "publicidade e conteúdos repetidos. "
+            "Você sempre prioriza notícias que podem gerar impacto financeiro, jurídico, operacional "
+            "ou estratégico para síndicos, administradoras e moradores."
         ),
-        "criterio": "mais impactantes, urgentes ou relevantes para síndicos e moradores",
-    },
-    "energia": {
-        "titulo": "⚡ <b>Radar do Setor Elétrico</b> ⚡",
-        "busca": "tarifa energia OR ANEEL OR bandeira tarifaria when:4h",
-        "persona": "Você é um analista do setor de energia elétrica brasileiro.",
         "criterio": (
-            "mais relevantes para quem trabalha com medição e faturamento de energia"
+            "Escolha exclusivamente as notícias que apresentem maior impacto para o setor condominial. "
+            "Priorize: \n"
+            "• mudanças na legislação;\n"
+            "• decisões judiciais (STJ, STF, Tribunais);\n"
+            "• crimes, fraudes e segurança;\n"
+            "• incêndios e acidentes;\n"
+            "• novas tecnologias e IA;\n"
+            "• economia e aumento de tarifas;\n"
+            "• inovação, sustentabilidade e mercado imobiliário.\n\n"
+            "Desconsidere: publicidade, artigos de opinião, matérias promocionais, "
+            "notícias sem impacto prático.\n"
+            "Caso existam diversas matérias sobre o mesmo assunto, escolha apenas a de melhor fonte. "
+            "É ESTRITAMENTE PROIBIDO escolher manchetes ou fatos que já tenham aparecido no bloco 'JÁ ENVIADAS'."
         ),
-    },
-    "saneamento": {
-        "titulo": "💧 <b>Radar de Saneamento</b> 💧",
-        "busca": "tarifa agua OR saneamento OR COMPESA OR CAGEPA when:2d",
-        "persona": "Você é um especialista em saneamento básico e regulação tarifária.",
-        "criterio": "mais relevantes para gestão de consumo de água em condomínios",
-    },
-    "tecnologia": {
-        "titulo": "💻 <b>Tech do Dia</b> 💻",
-        "busca": "inteligencia artificial OR desenvolvimento de software when:4h",
-        "persona": "Você é um engenheiro de software sênior acompanhando o mercado.",
-        "criterio": "mais relevantes para quem desenvolve software profissionalmente",
-    },
-    "local": {
-        "titulo": "📍 <b>Recife Hoje</b> 📍",
-        "busca": "Recife OR Pernambuco when:4h",
-        "persona": "Você é um jornalista local acompanhando a cidade.",
-        "criterio": "de maior impacto no dia a dia de quem mora na região",
-    },
-    "concorrencia": {
-        "titulo": "🔍 <b>Monitoramento de Mercado</b> 🔍",
-        "busca": '"nome da empresa" OR "nome do concorrente" when:7d',
-        "persona": "Você é um analista de inteligência de mercado.",
-        "criterio": "com maior impacto competitivo ou reputacional",
-    },
+    }
 }
 
 PERFIL_ATIVO = os.environ.get("PERFIL_ATIVO") or "condominios"
 PERFIL = PERFIS[PERFIL_ATIVO]
 
 # ---------- COMPORTAMENTO ----------
-QUANTIDADE_FINAL = 6        # quantas notícias entram no resumo
-MAX_NOTICIAS_ANALISADAS = 30  # quantas manchetes o modelo avalia
+QUANTIDADE_FINAL = 6
+MAX_NOTICIAS_ANALISADAS = 50
 LIMITE_TELEGRAM = 4096
-RESOLVER_LINKS = True       # converte o link do Google News na URL do veículo
+RESOLVER_LINKS = True
 TIMEOUT_RESOLUCAO = 8
-
-# Nova tentativa automática quando o Gemini está sobrecarregado (erro 503)
-# ou no limite de uso (erro 429). A espera dobra a cada tentativa: 5s, 10s, 20s.
 MAX_TENTATIVAS_GEMINI = 4
-ESPERA_INICIAL_GEMINI = 5  # segundos
+ESPERA_INICIAL_GEMINI = 5
 
 # ---------- FONTE ----------
-# Idioma e região do feed. Para notícias em inglês dos EUA:
-#   IDIOMA="en-US", REGIAO="US", EDICAO="US:en"
 IDIOMA = "pt-BR"
 REGIAO = "BR"
 EDICAO = "BR:pt-419"
-
-URL_RSS = (
-    "https://news.google.com/rss/search"
-    f"?q={quote(PERFIL['busca'])}&hl={IDIOMA}&gl={REGIAO}&ceid={EDICAO}"
-)
-
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 )
+
 # =================================================
 
+# ============== DEDUPLICAÇÃO E CACHE ==============
+
+def normalizar_para_hash(texto):
+    return re.sub(r"\s+", " ", texto or "").strip().lower()
+
+def hash_noticia(noticia):
+    carga = f"{normalizar_para_hash(noticia['link'])}|{normalizar_para_hash(noticia['titulo'])}"
+    return hashlib.sha256(carga.encode("utf-8")).hexdigest()
+
+def carregar_cache():
+    if not JORNAL_DEDUP_ARQUIVO.exists():
+        return {"entries": []}
+    try:
+        with JORNAL_DEDUP_ARQUIVO.open("r", encoding="utf-8") as f:
+            dados = json.load(f)
+        if not isinstance(dados, dict) or "entries" not in dados:
+            return {"entries": []}
+        return dados
+    except (json.JSONDecodeError, OSError) as erro:
+        print(f"[dedup] cache ilegível ({erro}); partindo de cache vazio.")
+        return {"entries": []}
+
+def podar_cache(cache, agora=None):
+    agora = agora or datetime.now(timezone.utc)
+    limite = agora - timedelta(hours=JORNAL_DEDUP_JANELA_HORAS)
+    antes = len(cache["entries"])
+    cache["entries"] = [
+        e for e in cache["entries"]
+        if datetime.fromisoformat(e["enviado_em"]) >= limite
+    ]
+    removidas = antes - len(cache["entries"])
+    if removidas:
+        print(f"[dedup] {removidas} entradas expiraram (fora da janela).")
+
+def ja_enviado(noticia, cache):
+    h = hash_noticia(noticia)
+    return any(e.get("hash") == h for e in cache["entries"])
+
+def historico_para_prompt(cache):
+    ordenadas = sorted(
+        cache["entries"],
+        key=lambda e: e["enviado_em"],
+        reverse=True,
+    )[:JORNAL_DEDUP_HISTORICO_GEMINI]
+    return [html.escape(e["titulo"], quote=False) for e in ordenadas]
+
+def registrar_envios(noticias, cache):
+    agora_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    for n in noticias:
+        cache["entries"].append({
+            "hash": hash_noticia(n),
+            "titulo": n["titulo"],
+            "link": n["link"],
+            "enviado_em": agora_iso,
+        })
+    podar_cache(cache)
+
+def gravar_cache(cache):
+    JORNAL_DEDUP_ARQUIVO.parent.mkdir(parents=True, exist_ok=True)
+    tmp = JORNAL_DEDUP_ARQUIVO.with_suffix(".json.tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump(cache, f, ensure_ascii=False, indent=2)
+    tmp.replace(JORNAL_DEDUP_ARQUIVO)
+
+def resetar_cache():
+    if JORNAL_DEDUP_ARQUIVO.exists():
+        JORNAL_DEDUP_ARQUIVO.unlink()
+        print(f"[dedup] cache removido: {JORNAL_DEDUP_ARQUIVO}")
+    else:
+        print("[dedup] cache já estava ausente; nada a remover.")
+
+# ============== TELEGRAM / GEMINI / FLUXO ==============
 
 def validar_config():
-    """Falha cedo e com mensagem clara se faltar alguma credencial."""
     obrigatorias = {
         "GEMINI_API_KEY": GEMINI_API_KEY,
         "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
         "TELEGRAM_CHAT_ID": TELEGRAM_CHAT_ID,
     }
-
     faltando = [nome for nome, valor in obrigatorias.items() if not valor]
-    if not faltando:
-        return
+    if faltando:
+        print("Erro de configuração. Faltam as variáveis:")
+        for nome in faltando:
+            print(f"   - {nome}")
+        sys.exit(1)
 
-    print("Erro de configuração. As seguintes variáveis não foram encontradas:")
-    for nome in faltando:
-        print(f"   - {nome}")
-    print(
-        "\nCopie o arquivo .env.example para .env e preencha os valores:\n"
-        "   copy .env.example .env"
-    )
-    sys.exit(1)
+def buscar_noticias_condominiais(cache):
+    print(f"1. Realizando múltiplas buscas no Google News [perfil: {PERFIL_ATIVO}]...")
+    todas_candidatas = []
+    links_vistos = set()
 
-
-def listar_modelos_disponiveis(client):
-    """Mostra os modelos que a chave atual enxerga (útil quando dá 404)."""
-    print("\nModelos disponíveis para a sua chave:")
-    try:
-        for modelo in client.models.list():
-            print(f"   - {modelo.name}")
-    except Exception as erro:
-        print(f"   Não foi possível listar os modelos: {erro}")
-
-
-def buscar_noticias_condominiais():
-    print(f"1. Buscando notícias recentes [perfil: {PERFIL_ATIVO}]...")
-    feed = feedparser.parse(URL_RSS)
-
-    noticias = []
-    for entrada in feed.entries[:MAX_NOTICIAS_ANALISADAS]:
-        fonte = ""
-        if hasattr(entrada, "source") and hasattr(entrada.source, "title"):
-            fonte = entrada.source.title
-
-        noticias.append(
-            {
-                "titulo": entrada.title,
-                "link": entrada.link,
-                "fonte": fonte,
-            }
+    # Itera sobre todas as consultas independentes
+    for busca in PERFIL["buscas"]:
+        url = (
+            "https://news.google.com/rss/search"
+            f"?q={quote(busca + ' when:1d')}&hl={IDIOMA}&gl={REGIAO}&ceid={EDICAO}"
         )
+        feed = feedparser.parse(url)
+        
+        for entrada in feed.entries:
+            link = entrada.link
+            
+            # Remove duplicadas exatas da busca (camada 1 de dedup da iteração)
+            if link in links_vistos:
+                continue
+            links_vistos.add(link)
 
-    print(f"-> {len(noticias)} notícias encontradas.")
-    return noticias
+            fonte = ""
+            if hasattr(entrada, "source") and hasattr(entrada.source, "title"):
+                fonte = entrada.source.title
 
+            # Extrai o timestamp para ordenar
+            data_publicacao = 0
+            if hasattr(entrada, "published_parsed") and entrada.published_parsed:
+                data_publicacao = time.mktime(entrada.published_parsed)
+
+            todas_candidatas.append({
+                "titulo": entrada.title,
+                "link": link,
+                "fonte": fonte,
+                "timestamp": data_publicacao
+            })
+
+    # Ordena as notícias da mais recente para a mais antiga
+    todas_candidatas.sort(key=lambda x: x["timestamp"], reverse=True)
+
+    # Remove duplicadas que já foram enviadas recentemente
+    filtradas = [n for n in todas_candidatas if not ja_enviado(n, cache)]
+    descartadas = len(todas_candidatas) - len(filtradas)
+    
+    print(
+        f"-> {len(todas_candidatas)} notícias únicas encontradas no total; "
+        f"{descartadas} descartadas por já constarem no cache."
+    )
+    
+    # Retorna o top N (agora 40~50) para o Gemini analisar
+    return filtradas[:MAX_NOTICIAS_ANALISADAS]
 
 def resolver_link(link):
-    """Segue o redirecionamento do Google News até a URL do veículo.
-
-    Se não conseguir sair do domínio do Google, devolve o link original,
-    que continua funcionando.
-    """
     if not RESOLVER_LINKS or "news.google.com" not in link:
         return link
-
     try:
         resposta = requests.get(
-            link,
-            headers={"User-Agent": USER_AGENT},
-            allow_redirects=True,
-            timeout=TIMEOUT_RESOLUCAO,
+            link, headers={"User-Agent": USER_AGENT},
+            allow_redirects=True, timeout=TIMEOUT_RESOLUCAO,
         )
     except requests.RequestException:
         return link
@@ -197,7 +258,6 @@ def resolver_link(link):
     if "news.google.com" not in resposta.url:
         return resposta.url
 
-    # Alguns redirecionamentos vêm por JavaScript dentro do HTML
     match = re.search(r'data-n-au="([^"]+)"', resposta.text)
     if match:
         return html.unescape(match.group(1))
@@ -208,37 +268,58 @@ def resolver_link(link):
 
     return link
 
-
-def montar_prompt(noticias):
+def montar_prompt(noticias, cache):
     lista = "\n".join(
         f"{i + 1}. {n['titulo']}" + (f" [{n['fonte']}]" if n["fonte"] else "")
         for i, n in enumerate(noticias)
     )
 
+    historico = historico_para_prompt(cache)
+    bloco_historico = ""
+    if historico:
+        bloco_historico = (
+            "JÁ ENVIADAS nas últimas "
+            f"{JORNAL_DEDUP_JANELA_HORAS}h (NÃO repita estas manchetes, "
+            "nem o mesmo fato por outro ângulo ou veículo):\n"
+            + "\n".join(f"- {t}" for t in historico)
+            + "\n\n"
+        )
+
     return f"""
 {PERFIL['persona']}
-Analise a lista de manchetes abaixo e selecione as {QUANTIDADE_FINAL} notícias
-{PERFIL['criterio']}.
 
-Responda APENAS com um array JSON válido, sem markdown, sem crases,
-sem nenhum texto antes ou depois. Cada item do array deve ter:
+Analise a lista de manchetes abaixo e selecione as {QUANTIDADE_FINAL} notícias.
+{PERFIL['criterio']}
 
-  "numero"  - o número da notícia na lista (inteiro)
-  "emoji"   - um único emoji relacionado ao tema
-  "motivo"  - uma frase curta explicando por que essa notícia importa
+{bloco_historico}Responda APENAS com um array JSON válido, sem markdown. 
+Cada item deve conter EXATAMENTE as seguintes chaves:
+
+  "numero"    - o número da notícia na lista (inteiro)
+  "emoji"     - um único emoji visualmente relacionado ao tema (ex: ⚖️, 🏢, 🚨, 💰)
+  "categoria" - palavra curta que defina o tema (ex: Jurídico, Segurança, Inovação, Mercado)
+  "impacto"   - nota de 1 a 10 representando o grau de impacto no setor
+  "motivo"    - uma frase curta e direta explicando a importância prática da notícia
+  "publico"   - alvo primário (ex: Síndicos, Moradores, Administradoras)
+  "urgencia"  - nível de urgência (Baixa, Média, Alta)
 
 Formato esperado:
-[{{"numero": 3, "emoji": "⚖️", "motivo": "Muda a responsabilidade do síndico em..."}}]
+[
+  {{
+    "numero": 4,
+    "emoji": "⚖️",
+    "categoria": "Jurídico",
+    "impacto": 10,
+    "motivo": "Muda a responsabilidade civil do síndico em casos de inadimplência.",
+    "publico": "Síndicos",
+    "urgencia": "Alta"
+  }}
+]
 
-Não inclua links, títulos nem tags HTML na sua resposta.
-
-Lista de manchetes de hoje:
+Lista de manchetes de hoje (já filtradas):
 {lista}
 """.strip()
 
-
 def extrair_texto(resposta):
-    """Lê só as partes de texto, ignorando o thought_signature dos modelos 3.x."""
     try:
         partes = resposta.candidates[0].content.parts
         texto = "".join(p.text for p in partes if getattr(p, "text", None))
@@ -246,14 +327,10 @@ def extrair_texto(resposta):
             return texto.strip()
     except (AttributeError, IndexError, TypeError):
         pass
-
     return (resposta.text or "").strip()
 
-
 def parsear_json(texto):
-    """Extrai o array JSON mesmo se vier embrulhado em crases ou texto extra."""
     limpo = re.sub(r"^```(?:json)?|```$", "", texto.strip(), flags=re.MULTILINE).strip()
-
     try:
         return json.loads(limpo)
     except json.JSONDecodeError:
@@ -265,29 +342,15 @@ def parsear_json(texto):
 
     raise ValueError("O modelo não devolveu um JSON válido.")
 
-
 def eh_erro_temporario(erro):
-    """503 (sobrecarga) e 429 (limite de uso) tendem a se resolver sozinhos
-    em poucos segundos. Erros como 404 (modelo não existe) ou 401 (chave
-    inválida) são permanentes — tentar de novo não muda o resultado, então
-    esses continuam subindo na hora.
-    """
     texto = str(erro)
     return any(
         marcador in texto
         for marcador in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")
     )
 
-
 def chamar_gemini_com_retentativa(client, prompt):
-    """Chama o Gemini e tenta de novo automaticamente se o erro for temporário.
-
-    Importante para execuções sem ninguém acompanhando (cron, GitHub Actions):
-    sem isso, um pico de demanda bem na hora agendada derruba a execução do
-    dia inteiro, sem chance de recuperação.
-    """
     espera = ESPERA_INICIAL_GEMINI
-
     for tentativa in range(1, MAX_TENTATIVAS_GEMINI + 1):
         try:
             return client.models.generate_content(
@@ -297,28 +360,26 @@ def chamar_gemini_com_retentativa(client, prompt):
         except Exception as erro:
             if not eh_erro_temporario(erro) or tentativa == MAX_TENTATIVAS_GEMINI:
                 raise
-
-            print(
-                f"-> Modelo sobrecarregado (tentativa {tentativa}/"
-                f"{MAX_TENTATIVAS_GEMINI}). Aguardando {espera}s..."
-            )
+            print(f"-> Modelo sobrecarregado (tentativa {tentativa}/{MAX_TENTATIVAS_GEMINI}). Aguardando {espera}s...")
             time.sleep(espera)
             espera *= 2
 
+def selecionar_com_ia(client, noticias, cache):
+    print(f"2. Analisando {len(noticias)} notícias com o modelo {GEMINI_MODEL}...")
+    resposta = chamar_gemini_com_retentativa(client, montar_prompt(noticias, cache))
 
-def selecionar_com_ia(client, noticias):
-    print(f"2. Analisando as notícias com o Gemini ({GEMINI_MODEL})...")
-
-    resposta = chamar_gemini_com_retentativa(client, montar_prompt(noticias))
-
-    selecoes = parsear_json(extrair_texto(resposta))
+    try:
+        selecoes = parsear_json(extrair_texto(resposta))
+    except ValueError as erro:
+        print(f"-> Resposta inválida do Gemini: {erro}")
+        return []
 
     escolhidas = []
     vistos = set()
 
     for item in selecoes:
         try:
-            indice = int(item["numero"]) - 1
+            indice = int(item.get("numero", -1)) - 1
         except (KeyError, TypeError, ValueError):
             continue
 
@@ -327,49 +388,53 @@ def selecionar_com_ia(client, noticias):
 
         vistos.add(indice)
         noticia = noticias[indice]
-        escolhidas.append(
-            {
-                "titulo": noticia["titulo"],
-                "link": noticia["link"],
-                "emoji": str(item.get("emoji", "📰"))[:4],
-                "motivo": str(item.get("motivo", "")).strip(),
-            }
-        )
+        
+        if ja_enviado(noticia, cache):
+            continue
+            
+        escolhidas.append({
+            "titulo": noticia["titulo"],
+            "link": noticia["link"],
+            "emoji": str(item.get("emoji", "📰"))[:4],
+            "categoria": str(item.get("categoria", "Geral")),
+            "impacto": item.get("impacto", 5),
+            "motivo": str(item.get("motivo", "")).strip(),
+            "publico": str(item.get("publico", "Geral")),
+            "urgencia": str(item.get("urgencia", "Média"))
+        })
 
-    print(f"-> {len(escolhidas)} notícias selecionadas.")
+    print(f"-> {len(escolhidas)} notícias selecionadas com sucesso.")
     return escolhidas[:QUANTIDADE_FINAL]
 
-
 def montar_mensagem(escolhidas):
-    print("3. Montando a mensagem e resolvendo os links...")
-
+    print("3. Montando a mensagem com os novos metadados e resolvendo os links...")
     blocos = [PERFIL["titulo"] + "\n"]
 
     for noticia in escolhidas:
         link = resolver_link(noticia["link"])
-
         titulo = html.escape(noticia["titulo"], quote=False)
         motivo = html.escape(noticia["motivo"], quote=False)
+        categoria = html.escape(noticia["categoria"], quote=False)
+        publico = html.escape(noticia["publico"], quote=False)
+        urgencia = html.escape(noticia["urgencia"], quote=False)
         url = html.escape(link, quote=True)
 
         bloco = f"{noticia['emoji']} <b>{titulo}</b>"
+        bloco += f"\n🏷️ <i>{categoria}</i> | 🎯 <b>Público:</b> {publico} | 🚨 <b>Urgência:</b> {urgencia} | 💥 <b>Impacto:</b> {noticia['impacto']}/10"
+        
         if motivo:
             bloco += f"\n{motivo}"
-        bloco += f'\n<a href="{url}">Ler a notícia</a>'
+        bloco += f'\n<a href="{url}">Ler a matéria completa</a>'
 
         blocos.append(bloco)
 
     return "\n\n".join(blocos)
 
-
 def dividir_mensagem(mensagem, limite=LIMITE_TELEGRAM):
-    """Quebra a mensagem em blocos, respeitando as linhas em branco."""
     if len(mensagem) <= limite:
         return [mensagem]
-
     partes = []
     atual = ""
-
     for bloco in mensagem.split("\n\n"):
         if len(atual) + len(bloco) + 2 > limite:
             if atual:
@@ -377,16 +442,14 @@ def dividir_mensagem(mensagem, limite=LIMITE_TELEGRAM):
             atual = bloco + "\n\n"
         else:
             atual += bloco + "\n\n"
-
     if atual.strip():
         partes.append(atual.strip())
-
     return partes
 
-
 def enviar_telegram(mensagem):
-    print("4. Enviando o resumo final para o Telegram...")
+    print("4. Enviando o resumo final de inteligência para o Telegram...")
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    sucesso_total = True
 
     for indice, bloco in enumerate(dividir_mensagem(mensagem), start=1):
         payload = {
@@ -395,57 +458,67 @@ def enviar_telegram(mensagem):
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
-
         try:
             resposta = requests.post(url, json=payload, timeout=30)
         except requests.RequestException as erro:
             print(f"-> Falha de conexão com o Telegram: {erro}")
-            return False
+            sucesso_total = False
+            break
 
         if resposta.status_code != 200:
-            print(f"-> Erro ao enviar o bloco {indice}: {resposta.text}")
-            return False
+            print(f"-> Erro ao enviar bloco: {resposta.text}")
+            sucesso_total = False
+            break
 
-    print("-> Mensagem entregue com sucesso no seu celular!")
+    if not sucesso_total:
+        return False
+
+    print("-> Boletim entregue com sucesso!")
     return True
 
+# ============== MAIN ==============
 
 def main():
+    parser = argparse.ArgumentParser(description="Bot de inteligência condominial.")
+    parser.add_argument("--resetar-cache", action="store_true")
+    args = parser.parse_args()
+
+    if args.resetar_cache:
+        resetar_cache()
+
     validar_config()
     client = genai.Client(api_key=GEMINI_API_KEY)
+    cache = carregar_cache()
+    podar_cache(cache)
 
     try:
-        noticias = buscar_noticias_condominiais()
+        noticias = buscar_noticias_condominiais(cache)
     except Exception as erro:
         print(f"Erro ao buscar as notícias: {erro}")
         return
 
     if not noticias:
-        print("O mercado condominial está tranquilo hoje. Nenhuma notícia nova.")
+        print("Nenhuma notícia nova encontrada após as múltiplas buscas e filtragens de cache.")
         return
 
     try:
-        escolhidas = selecionar_com_ia(client, noticias)
+        escolhidas = selecionar_com_ia(client, noticias, cache)
     except Exception as erro:
         print(f"Erro na chamada ao Gemini: {erro}")
-        if "NOT_FOUND" in str(erro) or "404" in str(erro):
-            print(f"\nO modelo '{GEMINI_MODEL}' não está disponível para a sua chave.")
-            listar_modelos_disponiveis(client)
-            print("\nAjuste GEMINI_MODEL no .env com um dos nomes acima.")
-        elif eh_erro_temporario(erro):
-            print(
-                f"\nO Gemini seguiu sobrecarregado mesmo após "
-                f"{MAX_TENTATIVAS_GEMINI} tentativas. Isso costuma passar "
-                "em poucos minutos — rode o script de novo daqui a pouco."
-            )
         return
 
     if not escolhidas:
-        print("O modelo não selecionou nenhuma notícia válida. Nada a enviar.")
+        print("O modelo não selecionou nenhuma notícia. Nada enviado.")
         return
 
-    enviar_telegram(montar_mensagem(escolhidas))
+    mensagem = montar_mensagem(escolhidas)
+    if not enviar_telegram(mensagem):
+        print("Falha no envio. O cache não foi atualizado.")
+        return
 
+    registrar_envios(escolhidas, cache)
+    gravar_cache(cache)
+    print(f"[dedup] {len(escolhidas)} entradas gravadas em cache.")
 
 if __name__ == "__main__":
     main()
