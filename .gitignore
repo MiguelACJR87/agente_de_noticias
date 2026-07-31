@@ -4,6 +4,9 @@
 *.key
 credentials.json
 
+# Cache de execução (deduplicação de notícias)
+.cache/
+
 # Python
 __pycache__/
 *.py[cod]
