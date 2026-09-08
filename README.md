@@ -3,7 +3,7 @@
 Motor de monitoramento em Python que coleta notícias de múltiplas buscas no
 Google News, remove o que já foi enviado nos últimos dias, usa a API do Gemini
 para selecionar as mais relevantes segundo um critério que você define, e
-entrega um boletim formatado no Telegram.
+entrega um boletim formatado no Telegram
 
 Nasceu como um bot de notícias condominiais, mas o comportamento inteiro é
 definido por **perfis** — o mesmo motor serve para monitorar tarifas de
