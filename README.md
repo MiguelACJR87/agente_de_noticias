@@ -8,7 +8,7 @@ entrega um boletim formatado no Telegram
 Nasceu como um bot de notícias condominiais, mas o comportamento inteiro é
 definido por **perfis** — o mesmo motor serve para monitorar tarifas de
 energia, saneamento, tecnologia, notícias locais ou movimentos de
-concorrentes.
+concorrentes
 
 ```
 ┌──────────┐   ┌────────────┐   ┌─────────────┐   ┌──────────┐   ┌──────────┐
