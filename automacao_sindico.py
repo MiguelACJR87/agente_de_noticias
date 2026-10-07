@@ -7,10 +7,12 @@ mais relevantes de acordo com critérios investigativos rigorosos.
 """
 
 import argparse
+import calendar
 import hashlib
 import html
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -22,6 +24,7 @@ import feedparser
 import requests
 from dotenv import load_dotenv
 from google import genai
+from google.genai import types
 
 # Carrega o arquivo .env da pasta do projeto
 load_dotenv()
@@ -31,6 +34,23 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL") or "gemini-3.6-flash"
+
+# Modelos de reserva, usados em ordem quando o principal está sobrecarregado
+# (503), sem cota (429) ou indisponível para a sua chave (404).
+# Cada modelo tem capacidade e cota próprias no Google, então trocar de modelo
+# resolve a maioria das falhas que só "tentar de novo" não resolve.
+GEMINI_MODELOS_RESERVA = [
+    m.strip()
+    for m in (
+        os.environ.get("GEMINI_MODELOS_RESERVA")
+        or "gemini-3.5-flash-lite,gemini-3.8-flash"
+    ).split(",")
+    if m.strip()
+]
+
+# Se TODOS os modelos falharem, envia as manchetes mais recentes sem curadoria
+# da IA (marcadas como tal) em vez de não enviar nada. "0" desliga.
+MODO_CONTINGENCIA = (os.environ.get("MODO_CONTINGENCIA") or "1").strip() != "0"
 
 # ---------- DEDUPLICAÇÃO ----------
 JORNAL_DEDUP_JANELA_HORAS = int(os.environ.get("JORNAL_DEDUP_JANELA_HORAS") or 72)
@@ -191,8 +211,10 @@ MAX_NOTICIAS_ANALISADAS = 50
 LIMITE_TELEGRAM = 4096
 RESOLVER_LINKS = True
 TIMEOUT_RESOLUCAO = 8
-MAX_TENTATIVAS_GEMINI = 4
-ESPERA_INICIAL_GEMINI = 5
+TENTATIVAS_POR_MODELO = 3       # tentativas em cada modelo antes de trocar
+ESPERA_INICIAL_GEMINI = 15      # segundos; dobra a cada tentativa
+ESPERA_MAXIMA_GEMINI = 60       # teto de espera entre tentativas
+TIMEOUT_GEMINI_MS = 120_000     # timeout de cada chamada (milissegundos)
 
 # ---------- FONTE ----------
 IDIOMA = "pt-BR"
@@ -319,7 +341,8 @@ def buscar_noticias_condominiais(cache):
             # Extrai o timestamp para ordenar
             data_publicacao = 0
             if hasattr(entrada, "published_parsed") and entrada.published_parsed:
-                data_publicacao = time.mktime(entrada.published_parsed)
+                # published_parsed vem em UTC; timegm não aplica fuso local
+                data_publicacao = calendar.timegm(entrada.published_parsed)
 
             todas_candidatas.append({
                 "titulo": entrada.title,
@@ -441,45 +464,93 @@ def parsear_json(texto):
 
     raise ValueError("O modelo não devolveu um JSON válido.")
 
-def eh_erro_temporario(erro):
+class GeminiIndisponivel(Exception):
+    """Todos os modelos configurados falharam."""
+
+
+def aviso_actions(mensagem):
+    """Mostra um aviso amarelo no resumo da execução do GitHub Actions."""
+    print(mensagem)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::warning::{mensagem}")
+
+
+def classificar_erro(erro):
+    """
+    Devolve:
+      "sobrecarga" - servidor ocupado/instável: vale esperar e repetir
+      "cota"       - limite de requisições da chave: trocar de modelo
+      "definitivo" - modelo inexistente, chave inválida etc.: trocar de modelo
+    """
+    codigo = getattr(erro, "code", None)
+    if isinstance(codigo, int):
+        if codigo in (500, 502, 503, 504):
+            return "sobrecarga"
+        if codigo == 429:
+            return "cota"
+        return "definitivo"
+
     texto = str(erro)
-    return any(
-        marcador in texto
-        for marcador in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")
+    nome_classe = type(erro).__name__
+    if any(m in texto for m in ("UNAVAILABLE", "INTERNAL", "DEADLINE_EXCEEDED")):
+        return "sobrecarga"
+    if "RESOURCE_EXHAUSTED" in texto:
+        return "cota"
+    if any(m in nome_classe for m in ("Timeout", "Connect", "RemoteProtocol")):
+        return "sobrecarga"
+    return "definitivo"
+
+
+def configuracao_geracao():
+    return types.GenerateContentConfig(
+        # Força a resposta em JSON puro (menos falhas de parsing)
+        response_mime_type="application/json",
+        # O bot não usa function calling; desligar remove o aviso de AFC do log
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(
+            disable=True
+        ),
     )
 
-def chamar_gemini_com_retentativa(client, prompt):
+
+def chamar_modelo_com_retentativa(client, modelo, prompt):
+    """Tenta um único modelo. Levanta a última exceção se desistir dele."""
     espera = ESPERA_INICIAL_GEMINI
-    for tentativa in range(1, MAX_TENTATIVAS_GEMINI + 1):
+    for tentativa in range(1, TENTATIVAS_POR_MODELO + 1):
         try:
             return client.models.generate_content(
-                model=GEMINI_MODEL,
+                model=modelo,
                 contents=prompt,
+                config=configuracao_geracao(),
             )
         except Exception as erro:
-            if not eh_erro_temporario(erro) or tentativa == MAX_TENTATIVAS_GEMINI:
+            tipo = classificar_erro(erro)
+            if tipo != "sobrecarga" or tentativa == TENTATIVAS_POR_MODELO:
                 raise
-            print(f"-> Modelo sobrecarregado (tentativa {tentativa}/{MAX_TENTATIVAS_GEMINI}). Aguardando {espera}s...")
-            time.sleep(espera)
+            pausa = min(espera, ESPERA_MAXIMA_GEMINI) + random.uniform(0, 3)
+            print(
+                f"-> {modelo} sobrecarregado (tentativa "
+                f"{tentativa}/{TENTATIVAS_POR_MODELO}). Aguardando {pausa:.0f}s..."
+            )
+            time.sleep(pausa)
             espera *= 2
 
-def selecionar_com_ia(client, noticias, cache):
-    print(f"2. Analisando {len(noticias)} notícias com o modelo {GEMINI_MODEL}...")
-    resposta = chamar_gemini_com_retentativa(client, montar_prompt(noticias, cache))
 
-    try:
-        selecoes = parsear_json(extrair_texto(resposta))
-    except ValueError as erro:
-        print(f"-> Resposta inválida do Gemini: {erro}")
+def interpretar_selecoes(selecoes, noticias, cache):
+    if isinstance(selecoes, dict):
+        # Alguns modelos embrulham o array: {"noticias": [...]}
+        selecoes = next((v for v in selecoes.values() if isinstance(v, list)), [])
+    if not isinstance(selecoes, list):
         return []
 
     escolhidas = []
     vistos = set()
 
     for item in selecoes:
+        if not isinstance(item, dict):
+            continue
         try:
             indice = int(item.get("numero", -1)) - 1
-        except (KeyError, TypeError, ValueError):
+        except (TypeError, ValueError):
             continue
 
         if indice < 0 or indice >= len(noticias) or indice in vistos:
@@ -487,10 +558,10 @@ def selecionar_com_ia(client, noticias, cache):
 
         vistos.add(indice)
         noticia = noticias[indice]
-        
+
         if ja_enviado(noticia, cache):
             continue
-            
+
         escolhidas.append({
             "titulo": noticia["titulo"],
             "link": noticia["link"],
@@ -499,32 +570,94 @@ def selecionar_com_ia(client, noticias, cache):
             "impacto": item.get("impacto", 5),
             "motivo": str(item.get("motivo", "")).strip(),
             "publico": str(item.get("publico", "Geral")),
-            "urgencia": str(item.get("urgencia", "Média"))
+            "urgencia": str(item.get("urgencia", "Média")),
         })
 
-    print(f"-> {len(escolhidas)} notícias selecionadas com sucesso.")
     return escolhidas[:QUANTIDADE_FINAL]
 
-def montar_mensagem(escolhidas):
-    print("3. Montando a mensagem com os novos metadados e resolvendo os links...")
-    blocos = [PERFIL["titulo"] + "\n"]
+
+def selecionar_com_ia(client, noticias, cache):
+    """
+    Percorre o modelo principal e os de reserva até um deles responder.
+    Levanta GeminiIndisponivel se nenhum responder com JSON válido.
+    """
+    modelos = [GEMINI_MODEL] + [m for m in GEMINI_MODELOS_RESERVA if m != GEMINI_MODEL]
+    prompt = montar_prompt(noticias, cache)
+    falhas = []
+
+    for posicao, modelo in enumerate(modelos):
+        rotulo = "principal" if posicao == 0 else f"reserva {posicao}"
+        print(f"2. Analisando {len(noticias)} notícias com {modelo} ({rotulo})...")
+
+        try:
+            resposta = chamar_modelo_com_retentativa(client, modelo, prompt)
+        except Exception as erro:
+            tipo = classificar_erro(erro)
+            resumo = str(erro).replace("\n", " ")[:200]
+            print(f"-> {modelo} falhou [{tipo}]: {resumo}")
+            falhas.append(f"{modelo}: {tipo}")
+            continue
+
+        try:
+            selecoes = parsear_json(extrair_texto(resposta))
+        except (ValueError, json.JSONDecodeError) as erro:
+            print(f"-> Resposta inválida de {modelo}: {erro}")
+            falhas.append(f"{modelo}: JSON inválido")
+            continue
+
+        escolhidas = interpretar_selecoes(selecoes, noticias, cache)
+        if posicao > 0:
+            aviso_actions(f"Boletim gerado pelo modelo de reserva {modelo} ({'; '.join(falhas)}).")
+        print(f"-> {len(escolhidas)} notícias selecionadas com sucesso.")
+        return escolhidas
+
+    raise GeminiIndisponivel("; ".join(falhas))
+
+
+def selecao_contingencia(noticias):
+    """Sem IA: pega as manchetes mais recentes (a lista já vem ordenada)."""
+    return [
+        {
+            "titulo": n["titulo"],
+            "link": n["link"],
+            "emoji": "📰",
+            "sem_metadados": True,
+        }
+        for n in noticias[:QUANTIDADE_FINAL]
+    ]
+
+
+def montar_mensagem(escolhidas, contingencia=False):
+    print("3. Montando a mensagem e resolvendo os links...")
+    cabecalho = PERFIL["titulo"]
+    if contingencia:
+        cabecalho += (
+            "\n⚠️ <i>IA indisponível no momento — manchetes mais recentes, "
+            "sem curadoria.</i>"
+        )
+    blocos = [cabecalho + "\n"]
 
     for noticia in escolhidas:
         link = resolver_link(noticia["link"])
         titulo = html.escape(noticia["titulo"], quote=False)
-        motivo = html.escape(noticia["motivo"], quote=False)
-        categoria = html.escape(noticia["categoria"], quote=False)
-        publico = html.escape(noticia["publico"], quote=False)
-        urgencia = html.escape(noticia["urgencia"], quote=False)
         url = html.escape(link, quote=True)
 
         bloco = f"{noticia['emoji']} <b>{titulo}</b>"
-        bloco += f"\n🏷️ <i>{categoria}</i> | 🎯 <b>Público:</b> {publico} | 🚨 <b>Urgência:</b> {urgencia} | 💥 <b>Impacto:</b> {noticia['impacto']}/10"
-        
-        if motivo:
-            bloco += f"\n{motivo}"
-        bloco += f'\n<a href="{url}">Ler a matéria completa</a>'
 
+        if not noticia.get("sem_metadados"):
+            motivo = html.escape(noticia["motivo"], quote=False)
+            categoria = html.escape(noticia["categoria"], quote=False)
+            publico = html.escape(noticia["publico"], quote=False)
+            urgencia = html.escape(noticia["urgencia"], quote=False)
+            impacto = html.escape(str(noticia["impacto"]), quote=False)
+            bloco += (
+                f"\n🏷️ <i>{categoria}</i> | 🎯 <b>Público:</b> {publico} | "
+                f"🚨 <b>Urgência:</b> {urgencia} | 💥 <b>Impacto:</b> {impacto}/10"
+            )
+            if motivo:
+                bloco += f"\n{motivo}"
+
+        bloco += f'\n<a href="{url}">Ler a matéria completa</a>'
         blocos.append(bloco)
 
     return "\n\n".join(blocos)
@@ -586,7 +719,10 @@ def main():
         resetar_cache()
 
     validar_config()
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options=types.HttpOptions(timeout=TIMEOUT_GEMINI_MS),
+    )
     cache = carregar_cache()
     podar_cache(cache)
 
@@ -600,17 +736,28 @@ def main():
         print("Nenhuma notícia nova encontrada após as múltiplas buscas e filtragens de cache.")
         return
 
+    contingencia = False
     try:
         escolhidas = selecionar_com_ia(client, noticias, cache)
+    except GeminiIndisponivel as erro:
+        if not MODO_CONTINGENCIA:
+            print(f"Erro: nenhum modelo do Gemini respondeu ({erro}).")
+            sys.exit(1)
+        aviso_actions(
+            f"Nenhum modelo do Gemini respondeu ({erro}). "
+            "Enviando boletim de contingência sem curadoria."
+        )
+        escolhidas = selecao_contingencia(noticias)
+        contingencia = True
     except Exception as erro:
-        print(f"Erro na chamada ao Gemini: {erro}")
+        print(f"Erro inesperado na etapa de IA: {erro}")
         sys.exit(1)
 
     if not escolhidas:
         print("O modelo não selecionou nenhuma notícia. Nada enviado.")
         return
 
-    mensagem = montar_mensagem(escolhidas)
+    mensagem = montar_mensagem(escolhidas, contingencia=contingencia)
     if not enviar_telegram(mensagem):
         print("Falha no envio. O cache não foi atualizado.")
         sys.exit(1)
