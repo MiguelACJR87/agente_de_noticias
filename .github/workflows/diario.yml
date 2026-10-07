@@ -1,11 +1,16 @@
-# Workflow do GitHub Actions — versão corrigida
+# Workflow do GitHub Actions — Resumo diário de notícias
 #
-# Mudanças em relação à versão anterior:
-#   1. GEMINI_MODEL agora é passado ao script (antes o Actions caía no
-#      padrão gemini-1.5-flash do código, que retorna 404).
-#   2. A pasta .cache é restaurada/salva entre execuções via actions/cache,
-#      fazendo a deduplicação de 72h funcionar também na nuvem.
-#   3. cache: pip acelera a instalação das bibliotecas.
+# Mudanças desta versão:
+#   1. Actions atualizadas para versões em Node.js 24 (checkout@v5,
+#      setup-python@v6, cache@v5) — remove o aviso de Node.js 20 depreciado.
+#   2. Runner fixado em ubuntu-24.04: o rótulo ubuntu-latest migra para o
+#      Ubuntu 26 a partir de 19/10/2026 e pode mudar o ambiente sem aviso.
+#   3. GEMINI_MODELOS_RESERVA: se o modelo principal estiver sobrecarregado
+#      (503) ou sem cota (429), o script tenta os modelos de reserva.
+#   4. MODO_CONTINGENCIA: se nenhum modelo responder, envia as manchetes mais
+#      recentes sem curadoria da IA em vez de falhar sem enviar nada.
+#   5. timeout-minutes e concurrency evitam execuções travadas ou sobrepostas
+#      disputando o cache de deduplicação.
 
 name: Resumo diário de notícias
 
@@ -17,16 +22,21 @@ on:
     - cron: "31 19 * * *"   # 16h31 em Brasília
   workflow_dispatch:
 
+concurrency:
+  group: resumo-noticias
+  cancel-in-progress: false
+
 jobs:
   enviar-resumo:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Preparar o Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
           cache: pip
@@ -36,7 +46,7 @@ jobs:
       # sobrescrever um cache existente; o restore-keys "dedup-" recupera
       # sempre o mais recente disponível.
       - name: Restaurar o cache de deduplicação
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache
           key: dedup-${{ github.run_id }}
@@ -51,7 +61,12 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Use aqui o mesmo modelo que funciona no seu .env local
           GEMINI_MODEL: gemini-3.6-flash
+          # Tentados em ordem quando o principal falha (separados por vírgula)
+          GEMINI_MODELOS_RESERVA: gemini-3.5-flash-lite,gemini-3.8-flash
+          # "1" = envia manchetes sem curadoria se nenhum modelo responder
+          # "0" = falha a execução sem enviar nada
+          MODO_CONTINGENCIA: "1"
           PERFIL_ATIVO: condominios
+          PYTHONUNBUFFERED: "1"
         run: python automacao_sindico.py
