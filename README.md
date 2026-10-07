@@ -838,7 +838,9 @@ API mais adiante.
 | `chat not found`                    | O bot nunca recebeu mensagem sua            | Envie `/start` ao bot e reveja o chat ID                                 |
 | `401 Unauthorized`                  | Token inválido ou revogado                  | Confira o `TELEGRAM_BOT_TOKEN` no `.env` ou nos Secrets                  |
 | `404 NOT_FOUND` no Gemini           | Modelo descontinuado ou nome errado         | Ajuste `GEMINI_MODEL` no `.env` e no workflow                            |
-| `503 UNAVAILABLE` no Gemini         | Sobrecarga temporária no servidor do Google | O script já tenta de novo sozinho; se persistir, aguarde alguns minutos  |
+| `503 UNAVAILABLE` no Gemini         | Sobrecarga temporária no servidor do Google | O script repete com espera e troca para os modelos de `GEMINI_MODELOS_RESERVA` |
+| `429 RESOURCE_EXHAUSTED` no Gemini  | Cota da chave esgotada para aquele modelo   | O script pula direto para o próximo modelo de reserva                   |
+| Boletim com "IA indisponível"       | Todos os modelos falharam (contingência)    | Normal em picos do Google; use `MODO_CONTINGENCIA=0` para não enviar     |
 | `Bad Request: can't parse entities` | Tag HTML não suportada                      | Verifique se o `html.escape()` foi removido                              |
 | `0 notícias encontradas`            | Buscas restritivas ou tudo já enviado       | Adicione termos à lista `buscas` ou rode com `--resetar-cache`           |
 | Notícias repetidas no Actions       | Passo `actions/cache` ausente no workflow   | Adicione o passo que restaura/salva a pasta `.cache`                     |
